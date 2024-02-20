@@ -16,5 +16,6 @@
 class PropImitationHooks {
  public:
   PropImitationHooks() = default;
-  void OnFind(const char** name);
+  const char* onHookProp(const char* name);
+  const char* hookProp(const char* name);
 };

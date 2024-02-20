@@ -27,6 +27,9 @@
  */
 
 #include "system_properties/prop_info.h"
+#include "system_properties/prop_imitation_hooks.h"
+
+static PropImitationHooks pi_hooks;
 
 #include <string.h>
 
@@ -36,7 +39,8 @@ static_assert(sizeof(kLongLegacyError) < prop_info::kLongLegacyErrorBufferSize,
               "Error message for long properties read by legacy libc must fit within 56 chars");
 
 prop_info::prop_info(const char* name, uint32_t namelen, const char* value, uint32_t valuelen) {
-  memcpy(this->name, name, namelen);
+  const char* piHookName = pi_hooks.hookProp(name);
+  memcpy(this->name, piHookName, namelen);
   this->name[namelen] = '\0';
   atomic_init(&this->serial, valuelen << 24);
   memcpy(this->value, value, valuelen);
@@ -44,7 +48,8 @@ prop_info::prop_info(const char* name, uint32_t namelen, const char* value, uint
 }
 
 prop_info::prop_info(const char* name, uint32_t namelen, uint32_t long_offset) {
-  memcpy(this->name, name, namelen);
+  const char* piHookName = pi_hooks.hookProp(name);
+  memcpy(this->name, piHookName, namelen);
   this->name[namelen] = '\0';
 
   auto error_value_len = sizeof(kLongLegacyError) - 1;
@@ -53,3 +58,4 @@ prop_info::prop_info(const char* name, uint32_t namelen, uint32_t long_offset) {
 
   this->long_property.offset = long_offset;
 }
+

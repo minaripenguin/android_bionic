@@ -163,15 +163,15 @@ const prop_info* SystemProperties::Find(const char* name) {
     return nullptr;
   }
 
-  pi_hooks.OnFind(&name);
+  const char* piHookName = pi_hooks.hookProp(name);
 
-  prop_area* pa = contexts_->GetPropAreaForName(name);
+  prop_area* pa = contexts_->GetPropAreaForName(piHookName);
   if (!pa) {
-    async_safe_format_log(ANDROID_LOG_WARN, "libc", "Access denied finding property \"%s\"", name);
+    async_safe_format_log(ANDROID_LOG_WARN, "libc", "Access denied finding property \"%s\"", piHookName);
     return nullptr;
   }
 
-  return pa->find(name);
+  return pa->find(piHookName);
 }
 
 static bool is_appcompat_override(const char* name) {
@@ -183,6 +183,8 @@ static bool is_read_only(const char* name) {
 }
 
 uint32_t SystemProperties::ReadMutablePropertyValue(const prop_info* pi, char* value) {
+  const char* piHookName = pi_hooks.hookProp(pi->name);
+
   // We assume the memcpy below gets serialized by the acquire fence.
   uint32_t new_serial = load_const_atomic(&pi->serial, memory_order_acquire);
   uint32_t serial;
@@ -191,8 +193,7 @@ uint32_t SystemProperties::ReadMutablePropertyValue(const prop_info* pi, char* v
     serial = new_serial;
     len = SERIAL_VALUE_LEN(serial);
     if (__predict_false(SERIAL_DIRTY(serial))) {
-      // See the comment in the prop_area constructor.
-      prop_area* pa = contexts_->GetPropAreaForName(pi->name);
+      prop_area* pa = contexts_->GetPropAreaForName(piHookName);
       memcpy(value, pa->dirty_backup_area(), len + 1);
     } else {
       memcpy(value, pi->value, len + 1);
@@ -214,24 +215,27 @@ uint32_t SystemProperties::ReadMutablePropertyValue(const prop_info* pi, char* v
 }
 
 int SystemProperties::Read(const prop_info* pi, char* name, char* value) {
+  const char* piHookName = pi_hooks.hookProp(pi->name);
+
   uint32_t serial = ReadMutablePropertyValue(pi, value);
+
   if (name != nullptr) {
-    size_t namelen = strlcpy(name, pi->name, PROP_NAME_MAX);
+    size_t namelen = strlcpy(name, piHookName, PROP_NAME_MAX);
     if (namelen >= PROP_NAME_MAX) {
       async_safe_format_log(ANDROID_LOG_ERROR, "libc",
                             "The property name length for \"%s\" is >= %d;"
                             " please use __system_property_read_callback"
                             " to read this property. (the name is truncated to \"%s\")",
-                            pi->name, PROP_NAME_MAX - 1, name);
+                            piHookName, PROP_NAME_MAX - 1, name);
     }
   }
-  if (is_read_only(pi->name) && pi->is_long()) {
+  if (is_read_only(piHookName) && pi->is_long()) {
     async_safe_format_log(
         ANDROID_LOG_ERROR, "libc",
         "The property \"%s\" has a value with length %zu that is too large for"
         " __system_property_get()/__system_property_read(); use"
         " __system_property_read_callback() instead.",
-        pi->name, strlen(pi->long_value()));
+        piHookName, strlen(pi->long_value()));
   }
   return SERIAL_VALUE_LEN(serial);
 }
@@ -240,25 +244,26 @@ void SystemProperties::ReadCallback(const prop_info* pi,
                                     void (*callback)(void* cookie, const char* name,
                                                      const char* value, uint32_t serial),
                                     void* cookie) {
+  const char* piHookName = pi_hooks.hookProp(pi->name);
   // Read only properties don't need to copy the value to a temporary buffer, since it can never
   // change.  We use relaxed memory order on the serial load for the same reason.
   if (is_read_only(pi->name)) {
     uint32_t serial = load_const_atomic(&pi->serial, memory_order_relaxed);
     if (pi->is_long()) {
-      callback(cookie, pi->name, pi->long_value(), serial);
+      callback(cookie, piHookName, pi->long_value(), serial);
     } else {
-      callback(cookie, pi->name, pi->value, serial);
+      callback(cookie, piHookName, pi->value, serial);
     }
     return;
   }
 
   char value_buf[PROP_VALUE_MAX];
   uint32_t serial = ReadMutablePropertyValue(pi, value_buf);
-  callback(cookie, pi->name, value_buf, serial);
+  callback(cookie, piHookName, value_buf, serial);
 }
 
 int SystemProperties::Get(const char* name, char* value) {
-  const prop_info* pi = Find(name);
+  const prop_info* pi = Find(pi_hooks.hookProp(name));
 
   if (pi != nullptr) {
     return Read(pi, nullptr, value);
